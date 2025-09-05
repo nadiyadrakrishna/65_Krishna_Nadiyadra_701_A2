@@ -1,0 +1,485 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+    <title>Weather App</title>
+    <link rel="stylesheet" href="/style.css" />
+</head>
+<body <%= weather ? 'data-weather="' + weather.desc.toLowerCase().replace(/\s+/g, '') + '"' : 'data-weather="default"' %>>
+    <div class="container">
+        <h1>Weather App</h1>
+        <form action="/" method="POST" id="weatherForm">
+            <div class="autocomplete-container">
+                <input type="text" name="city" id="cityInput" placeholder="Enter City Name" required value="<%= typeof inputCity !== 'undefined' ? inputCity : '' %>">
+                <div id="suggestionsList" class="suggestions-list">
+                    </div>
+            </div>
+            <button type="submit" id="submitButton">Get Weather</button>
+            <input type="hidden" name="lat" id="latInput">
+            <input type="hidden" name="lon" id="lonInput">
+        </form>
+
+        <button type="button" id="getLocationButton" class="get-location-button">Get My Location Weather</button>
+
+        <div id="loadingMessage" class="loading" style="display: none;">Loading weather...</div>
+
+        <% if (weather) { %>
+            <div class="weather-result">
+                <h2><%= weather.city %></h2>
+                <p class="local-time" id="localTime"></p>
+                <p class="main-temp" data-celsius="<%= weather.temp %>" data-fahrenheit="<%= (weather.temp * 9/5 + 32).toFixed(1) %>">
+                    <%= weather.temp.toFixed(1) %>°C
+                </p>
+                <p class="description"><%= weather.desc %></p>
+                <img src="http://openweathermap.org/img/wn/<%= weather.icon %>@2x.png" alt="weather icon">
+                <div class="details">
+                    <p>Feels like:
+                        <span data-celsius="<%= weather.feelsLike.toFixed(1) %>" data-fahrenheit="<%= (weather.feelsLike * 9/5 + 32).toFixed(1) %>">
+                            <%= weather.feelsLike.toFixed(1) %>
+                        </span>°C
+                    </p>
+                    <p>Humidity: <span><%= weather.humidity %>%</span></p>
+                    <p>Wind Speed: <span><%= weather.windSpeed.toFixed(1) %> m/s</span></p>
+                </div>
+                <div class="unit-toggle-container">
+                    <button id="toggleUnits" class="toggle-button" data-unit="celsius">Show °F</button>
+                </div>
+            </div>
+        <% } %>
+
+        <% if (error) { %>
+            <p class="error"><%= error %></p>
+        <% } %>
+
+        <% if (forecast && forecast.length > 0) { %>
+            <div class="forecast-section">
+                <h3>5-Day Forecast</h3>
+                <div class="forecast-container">
+                    <% forecast.forEach(day => { %>
+                        <div class="forecast-day">
+                            <p class="forecast-date"><%= day.date %></p>
+                            <img src="http://openweathermap.org/img/wn/<%= day.icon %>@2x.png" alt="<%= day.description %> icon">
+                            <p class="forecast-temps">
+                                <span class="temp-min" data-celsius-min="<%= day.temp_min.toFixed(1) %>" data-fahrenheit-min="<%= (day.temp_min * 9/5 + 32).toFixed(1) %>">
+                                    <%= day.temp_min.toFixed(0) %>
+                                </span>° /
+                                <span class="temp-max" data-celsius-max="<%= day.temp_max.toFixed(1) %>" data-fahrenheit-max="<%= (day.temp_max * 9/5 + 32).toFixed(1) %>">
+                                    <%= day.temp_max.toFixed(0) %>
+                                </span>°C
+                            </p>
+                            <p class="forecast-desc"><%= day.description %></p>
+                        </div>
+                    <% }); %>
+                </div>
+            </div>
+        <% } %>
+
+        <div class="search-history">
+            <h3>Recent Searches:</h3>
+            <div id="historyButtons" class="history-buttons">
+                </div>
+        </div>
+
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            const weatherForm = document.getElementById('weatherForm');
+            const cityInput = document.getElementById('cityInput');
+            const submitButton = document.getElementById('submitButton');
+            const loadingMessage = document.getElementById('loadingMessage');
+            const errorParagraph = document.createElement('p');
+            errorParagraph.classList.add('error');
+            errorParagraph.style.display = 'none';
+
+            const getLocationButton = document.getElementById('getLocationButton');
+            const latInput = document.getElementById('latInput');
+            const lonInput = document.getElementById('lonInput');
+
+            // --- Autocomplete Elements ---
+            const autocompleteContainer = document.querySelector('.autocomplete-container');
+            const suggestionsList = document.getElementById('suggestionsList');
+            let debounceTimeout;
+
+            // --- Real-Time Clock Elements ---
+            const localTimeElement = document.getElementById('localTime');
+            let timeUpdateInterval; // To store the interval ID
+
+
+            weatherForm.parentNode.insertBefore(errorParagraph, weatherForm);
+
+            // --- Loading Indicator Reset Logic ---
+            window.addEventListener('pageshow', (event) => {
+                if (event.persisted) {
+                    submitButton.disabled = false;
+                    submitButton.textContent = 'Get Weather';
+                    loadingMessage.style.display = 'none';
+                    getLocationButton.disabled = false;
+                    getLocationButton.textContent = 'Get My Location Weather';
+                }
+            });
+            submitButton.disabled = false;
+            submitButton.textContent = 'Get Weather';
+            loadingMessage.style.display = 'none';
+            getLocationButton.disabled = false;
+            getLocationButton.textContent = 'Get My Location Weather';
+
+
+            // --- Form Submission Handler ---
+            weatherForm.addEventListener('submit', (event) => {
+                const city = cityInput.value.trim();
+                const lat = latInput.value;
+                const lon = lonInput.value;
+
+                if (!city && (!lat || !lon)) {
+                    event.preventDefault();
+                    errorParagraph.textContent = "Please enter a city name or use 'Get My Location'.";
+                    errorParagraph.style.display = 'block';
+                } else {
+                    errorParagraph.style.display = 'none';
+                    errorParagraph.textContent = '';
+                    hideSuggestions(); // Hide suggestions on submit
+                    stopTimeUpdate(); // Stop any existing clock
+
+                    submitButton.disabled = true;
+                    submitButton.textContent = 'Loading...';
+                    getLocationButton.disabled = true;
+                    getLocationButton.textContent = 'Loading...';
+                    loadingMessage.style.display = 'block';
+
+                    if (city) {
+                        addCityToHistory(city);
+                    }
+                }
+            });
+
+            // --- Input Change Listener (to clear client-side error) ---
+            cityInput.addEventListener('input', () => {
+                if (errorParagraph.style.display === 'block' && cityInput.value.trim() !== '') {
+                    errorParagraph.style.display = 'none';
+                    errorParagraph.textContent = '';
+                }
+                latInput.value = ''; // Clear lat/lon if user starts typing in city field
+                lonInput.value = '';
+
+                // Trigger autocomplete logic
+                handleCityInput();
+            });
+
+            // --- Autocomplete Logic ---
+            function handleCityInput() {
+                clearTimeout(debounceTimeout);
+                const query = cityInput.value.trim();
+
+                if (query.length < 2) {
+                    hideSuggestions();
+                    return;
+                }
+
+                debounceTimeout = setTimeout(() => {
+                    fetchSuggestions(query);
+                }, 300);
+            }
+
+            async function fetchSuggestions(query) {
+                try {
+                    const response = await fetch(`/api/suggest-cities?q=${encodeURIComponent(query)}`);
+                    const suggestions = await response.json();
+                    displaySuggestions(suggestions);
+                } catch (error) {
+                    console.error("Error fetching suggestions:", error);
+                    hideSuggestions();
+                }
+            }
+
+            function displaySuggestions(suggestions) {
+                suggestionsList.innerHTML = '';
+
+                if (suggestions.length === 0) {
+                    hideSuggestions();
+                    return;
+                }
+
+                suggestions.forEach(item => {
+                    const div = document.createElement('div');
+                    div.classList.add('suggestion-item');
+                    let displayName = item.name;
+                    if (item.state) {
+                        displayName += `, ${item.state}`;
+                    }
+                    if (item.country) {
+                        displayName += `, ${item.country}`;
+                    }
+                    div.textContent = displayName;
+
+                    div.addEventListener('click', () => {
+                        cityInput.value = item.name;
+                        latInput.value = item.lat;
+                        lonInput.value = item.lon;
+                        hideSuggestions();
+                        weatherForm.submit();
+                    });
+                    suggestionsList.appendChild(div);
+                });
+                suggestionsList.style.display = 'block';
+            }
+
+            function hideSuggestions() {
+                suggestionsList.innerHTML = '';
+                suggestionsList.style.display = 'none';
+            }
+
+            document.addEventListener('click', (event) => {
+                if (!autocompleteContainer.contains(event.target)) {
+                    hideSuggestions();
+                }
+            });
+            cityInput.addEventListener('blur', () => {
+                setTimeout(() => hideSuggestions(), 100);
+            });
+
+
+            // --- Geolocation Logic ---
+            getLocationButton.addEventListener('click', () => {
+                cityInput.value = '';
+                latInput.value = '';
+                lonInput.value = '';
+                errorParagraph.style.display = 'none';
+                errorParagraph.textContent = '';
+                hideSuggestions();
+                stopTimeUpdate(); // Stop any existing clock
+
+                submitButton.disabled = true;
+                submitButton.textContent = 'Loading...';
+                getLocationButton.disabled = true;
+                getLocationButton.textContent = 'Getting Location...';
+                loadingMessage.style.display = 'block';
+
+                if (navigator.geolocation) {
+                    navigator.geolocation.getCurrentPosition(
+                        (position) => {
+                            latInput.value = position.coords.latitude;
+                            lonInput.value = position.coords.longitude;
+                            weatherForm.submit();
+                        },
+                        (error) => {
+                            loadingMessage.style.display = 'none';
+                            submitButton.disabled = false;
+                            submitButton.textContent = 'Get Weather';
+                            getLocationButton.disabled = false;
+                            getLocationButton.textContent = 'Get My Location Weather';
+
+                            let errorMessage = "Unable to retrieve your location.";
+                            switch(error.code) {
+                                case error.PERMISSION_DENIED:
+                                    errorMessage = "Location access denied. Please enable it in your browser settings.";
+                                    break;
+                                case error.POSITION_UNAVAILABLE:
+                                    errorMessage = "Location information is unavailable.";
+                                    break;
+                                case error.TIMEOUT:
+                                    errorMessage = "The request to get user location timed out.";
+                                    break;
+                                default:
+                                    errorMessage = "An unknown geolocation error occurred.";
+                                    break;
+                            }
+                            errorParagraph.textContent = errorMessage;
+                            errorParagraph.style.display = 'block';
+                        },
+                        {
+                            enableHighAccuracy: true,
+                            timeout: 10000,
+                            maximumAge: 0
+                        }
+                    );
+                } else {
+                    loadingMessage.style.display = 'none';
+                    submitButton.disabled = false;
+                    submitButton.textContent = 'Get Weather';
+                    getLocationButton.disabled = false;
+                    getLocationButton.textContent = 'Get My Location Weather';
+
+                    errorParagraph.textContent = "Geolocation is not supported by this browser.";
+                    errorParagraph.style.display = 'block';
+                }
+            });
+
+            // --- Unit Toggle Logic ---
+            const toggleButton = document.getElementById('toggleUnits');
+            const tempElementsToToggle = document.querySelectorAll('.main-temp, .details p:first-child span, .forecast-temps .temp-min, .forecast-temps .temp-max');
+
+            if (toggleButton && tempElementsToToggle.length > 0) {
+                toggleButton.addEventListener('click', () => {
+                    let currentUnit = toggleButton.dataset.unit;
+                    let newUnit;
+                    const degreeSymbol = '°';
+
+                    tempElementsToToggle.forEach(element => {
+                        if (currentUnit === 'celsius') {
+                            if (element.classList.contains('main-temp')) {
+                                element.textContent = `${element.dataset.fahrenheit}${degreeSymbol}F`;
+                            } else if (element.classList.contains('temp-min')) {
+                                element.textContent = element.dataset.fahrenheitMin;
+                            } else if (element.classList.contains('temp-max')) {
+                                element.textContent = element.dataset.fahrenheitMax;
+                                if (element.nextSibling && element.nextSibling.nodeType === Node.TEXT_NODE) {
+                                    element.nextSibling.textContent = degreeSymbol + 'F';
+                                }
+                            } else { // For feelsLike span
+                                element.textContent = element.dataset.fahrenheit;
+                                if (element.nextSibling && element.nextSibling.nodeType === Node.TEXT_NODE) {
+                                    element.nextSibling.textContent = degreeSymbol + 'F';
+                                }
+                            }
+                            newUnit = 'fahrenheit';
+                            toggleButton.textContent = 'Show °C';
+                        } else {
+                            if (element.classList.contains('main-temp')) {
+                                element.textContent = `${element.dataset.celsius}${degreeSymbol}C`;
+                            } else if (element.classList.contains('temp-min')) {
+                                element.textContent = element.dataset.celsiusMin;
+                            } else if (element.classList.contains('temp-max')) {
+                                element.textContent = element.dataset.celsiusMax;
+                                if (element.nextSibling && element.nextSibling.nodeType === Node.TEXT_NODE) {
+                                    element.nextSibling.textContent = degreeSymbol + 'C';
+                                }
+                            } else { // For feelsLike span
+                                element.textContent = element.dataset.celsius;
+                                if (element.nextSibling && element.nextSibling.nodeType === Node.TEXT_NODE) {
+                                    element.nextSibling.textContent = degreeSymbol + 'C';
+                                }
+                            }
+                            newUnit = 'celsius';
+                            toggleButton.textContent = 'Show °F';
+                        }
+                    });
+                    toggleButton.dataset.unit = newUnit;
+                });
+            }
+
+            // --- Search History Logic ---
+            const HISTORY_KEY = 'weather_search_history';
+            const MAX_HISTORY_ITEMS = 5;
+            const historyButtonsContainer = document.getElementById('historyButtons');
+
+            function getHistory() {
+                try {
+                    const historyString = localStorage.getItem(HISTORY_KEY);
+                    return historyString ? JSON.parse(historyString) : [];
+                } catch (e) {
+                    console.error("Error reading history from localStorage:", e);
+                    return [];
+                }
+            }
+
+            function saveHistory(historyArray) {
+                try {
+                    localStorage.setItem(HISTORY_KEY, JSON.stringify(historyArray));
+                } catch (e) {
+                    console.error("Error saving history to localStorage:", e);
+                }
+            }
+
+            function addCityToHistory(city) {
+                let history = getHistory();
+                history = history.filter(item => item.toLowerCase() !== city.toLowerCase());
+                history.unshift(city);
+                history = history.slice(0, MAX_HISTORY_ITEMS);
+                saveHistory(history);
+                renderHistoryButtons();
+            }
+
+            function renderHistoryButtons() {
+                const history = getHistory();
+                historyButtonsContainer.innerHTML = '';
+
+                if (history.length === 0) {
+                    historyButtonsContainer.textContent = "No recent searches.";
+                    return;
+                }
+
+                history.forEach(city => {
+                    const button = document.createElement('button');
+                    button.classList.add('history-button');
+                    button.textContent = city;
+                    button.addEventListener('click', () => {
+                        cityInput.value = city;
+                        latInput.value = '';
+                        lonInput.value = '';
+                        weatherForm.submit();
+                    });
+                    historyButtonsContainer.appendChild(button);
+                });
+            }
+            renderHistoryButtons();
+
+            // --- Real-Time Clock Functionality ---
+            // This block runs if weather data is present on page load (e.g., after a POST request)
+            // The JSON.stringify(weather) is safe because 'weather' is a plain JS object from server.
+            const initialWeatherData = <%- JSON.stringify(weather) %>;
+
+            function updateLocalTime(timezoneOffsetSeconds) {
+                if (!localTimeElement || timezoneOffsetSeconds === undefined || timezoneOffsetSeconds === null) {
+                    localTimeElement.textContent = ''; // Clear time if no data
+                    return;
+                }
+
+                // Get current UTC time (milliseconds since epoch)
+                // Date.prototype.getTime() returns milliseconds since Jan 1, 1970 UTC.
+                // Date.prototype.getTimezoneOffset() returns the difference in minutes between UTC and local time.
+                // It's positive if local time is behind UTC (e.g., -4 for New York -> +240 min offset),
+                // and negative if local time is ahead of UTC (e.g., +5.5 for India -> -330 min offset).
+                // To convert client's local milliseconds to UTC milliseconds, ADD the offset.
+                const now = new Date();
+                const utcMilliseconds = now.getTime() + (now.getTimezoneOffset() * 60 * 1000);
+
+                // Calculate local time in milliseconds for the city using its UTC offset from OpenWeatherMap
+                // OpenWeatherMap's 'timezone' field is the shift in seconds from UTC.
+                const cityLocalMilliseconds = utcMilliseconds + (timezoneOffsetSeconds * 1000);
+
+                // Create a Date object for the city's local time
+                const cityDate = new Date(cityLocalMilliseconds);
+
+                // Format the time
+                const options = {
+                    hour: '2-digit',
+                    minute: '2-digit',
+                    second: '2-digit',
+                    hour12: true // For AM/PM format (e.g., 01:00 PM)
+                };
+                localTimeElement.textContent = cityDate.toLocaleTimeString('en-US', options);
+            }
+
+            function startTimeUpdate(timezoneOffsetSeconds) {
+                stopTimeUpdate(); // Clear any existing interval before starting a new one
+                if (timezoneOffsetSeconds !== undefined && timezoneOffsetSeconds !== null) {
+                    // Update immediately
+                    updateLocalTime(timezoneOffsetSeconds);
+                    // Then update every second
+                    timeUpdateInterval = setInterval(() => {
+                        updateLocalTime(timezoneOffsetSeconds);
+                    }, 1000);
+                } else {
+                    localTimeElement.textContent = ''; // Clear if no offset
+                }
+            }
+
+            function stopTimeUpdate() {
+                if (timeUpdateInterval) {
+                    clearInterval(timeUpdateInterval);
+                    timeUpdateInterval = null;
+                }
+            }
+
+            // Initial call if weather data is present on page load after a search
+            if (initialWeatherData && initialWeatherData.timezone !== undefined && initialWeatherData.timezone !== null) {
+                startTimeUpdate(initialWeatherData.timezone);
+            } else {
+                localTimeElement.textContent = ''; // Ensure it's clear if no weather data
+            }
+        });
+    </script>
+</body>
+</html>
