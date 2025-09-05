@@ -1,0 +1,15 @@
+{
+  "username": "krishna_nadiyadra",
+  "email": "nadiyadrakrishna@gmail.com",
+  "gender": "Female",
+  "hobbies": [
+    "Reading",
+    "Traveling"
+  ],
+  "profilePic": "/uploads/1756220045226_profile pic.PNG",
+  "otherPics": [
+    "/uploads/1756220045231_image5.png",
+    "/uploads/1756220045232_image4.png",
+    "/uploads/1756220045232_image3.png"
+  ]
+}
